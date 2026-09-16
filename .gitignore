@@ -1,0 +1,8 @@
+# Local build output
+gopilot
+*.test
+coverage.out
+
+# Local credentials and runtime files
+.env
+*.log
