@@ -40,23 +40,25 @@ func TestHandleUserMessage_PreservesEmptyBlockArray(t *testing.T) {
 	}
 }
 
-func TestNormalizeGeminiMessages_AppendsContinuationAfterAssistantTail(t *testing.T) {
+func TestNormalizeAssistantTail_AppendsContinuationForAffectedModels(t *testing.T) {
 	messages := []OpenAIMessage{{Role: "user", Content: "first"}, {Role: "assistant", Content: "prefill"}}
-	got := normalizeGeminiMessages("gemini-3.8-flash", messages)
-	if len(got) != 3 || got[2].Role != "user" || got[2].Content != "Continue." {
-		t.Fatalf("unexpected normalized Gemini messages: %#v", got)
+	for _, model := range []string{"gemini-3.8-flash", "claude-sonnet-5.5"} {
+		got := normalizeAssistantTail(model, messages)
+		if len(got) != 3 || got[2].Role != "user" || got[2].Content != "Continue." {
+			t.Fatalf("unexpected normalized messages for %s: %#v", model, got)
+		}
 	}
 	if len(messages) != 2 {
 		t.Fatalf("normalizer mutated input slice: %#v", messages)
 	}
 }
 
-func TestNormalizeGeminiMessages_LeavesValidAndNonGeminiConversations(t *testing.T) {
+func TestNormalizeAssistantTail_LeavesValidAndSupportedConversations(t *testing.T) {
 	assistantTail := []OpenAIMessage{{Role: "assistant", Content: "tail"}}
-	if got := normalizeGeminiMessages("gemini-3.8-flash", []OpenAIMessage{{Role: "user", Content: "ok"}}); len(got) != 1 {
+	if got := normalizeAssistantTail("gemini-3.8-flash", []OpenAIMessage{{Role: "user", Content: "ok"}}); len(got) != 1 {
 		t.Fatalf("user-ended Gemini conversation changed: %#v", got)
 	}
-	if got := normalizeGeminiMessages("claude-sonnet-4", assistantTail); len(got) != 1 {
-		t.Fatalf("non-Gemini conversation changed: %#v", got)
+	if got := normalizeAssistantTail("claude-sonnet-4", assistantTail); len(got) != 1 {
+		t.Fatalf("supported assistant prefill changed: %#v", got)
 	}
 }

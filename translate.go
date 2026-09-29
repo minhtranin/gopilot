@@ -35,7 +35,7 @@ func translateToOpenAI(a AnthropicRequest) OpenAIRequest {
 	model := translateModelName(a.Model)
 	return OpenAIRequest{
 		Model:       model,
-		Messages:    normalizeGeminiMessages(model, translateMessages(a.Messages, a.System)),
+		Messages:    normalizeAssistantTail(model, translateMessages(a.Messages, a.System)),
 		MaxTokens:   a.MaxTokens,
 		Stop:        a.StopSequences,
 		Stream:      a.Stream,
@@ -63,12 +63,13 @@ func reasoningEffortFor(model string) string {
 	return ""
 }
 
-// Gemini rejects a Chat Completions request whose final message is assistant,
-// while Anthropic permits an assistant prefill/history tail. Add a neutral
-// continuation turn only for Gemini; tool-result and user-ended conversations
-// are left byte-for-byte equivalent.
-func normalizeGeminiMessages(model string, messages []OpenAIMessage) []OpenAIMessage {
-	if !strings.HasPrefix(model, "gemini") || len(messages) == 0 {
+// Gemini and Claude Sonnet 5.5 reject a Chat Completions request whose final
+// message is assistant, while the Anthropic client can send an assistant
+// prefill/history tail. Add a neutral continuation turn for affected models;
+// tool-result and user-ended conversations remain byte-for-byte equivalent.
+func normalizeAssistantTail(model string, messages []OpenAIMessage) []OpenAIMessage {
+	rejectsAssistantTail := strings.HasPrefix(model, "gemini") || model == "claude-sonnet-5.5"
+	if !rejectsAssistantTail || len(messages) == 0 {
 		return messages
 	}
 	if messages[len(messages)-1].Role != "assistant" {
