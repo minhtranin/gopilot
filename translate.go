@@ -33,9 +33,10 @@ func translateModelName(model string) string {
 
 func translateToOpenAI(a AnthropicRequest) OpenAIRequest {
 	model := translateModelName(a.Model)
+	messages := normalizeToolTurns(translateMessages(a.Messages, a.System))
 	return OpenAIRequest{
 		Model:       model,
-		Messages:    normalizeAssistantTail(model, translateMessages(a.Messages, a.System)),
+		Messages:    normalizeAssistantTail(model, messages),
 		MaxTokens:   a.MaxTokens,
 		Stop:        a.StopSequences,
 		Stream:      a.Stream,
@@ -56,6 +57,87 @@ func translateToOpenAI(a AnthropicRequest) OpenAIRequest {
 	}
 }
 
+// normalizeToolTurns repairs the shape Claude Code can persist when parallel
+// tool calls are resumed from JSONL: one assistant message per tool_use and one
+// user message per tool_result. Chat Completions requires all calls in a single
+// assistant turn and every matching tool result immediately after it. Images
+// extracted from tool results must follow the complete result group.
+//
+// A tool call with no result is removed. Keeping it would make the entire
+// request invalid; any assistant text and unrelated user content are retained.
+func normalizeToolTurns(messages []OpenAIMessage) []OpenAIMessage {
+	var out []OpenAIMessage
+	for i := 0; i < len(messages); {
+		if messages[i].Role != "assistant" || len(messages[i].ToolCalls) == 0 {
+			if messages[i].Role != "tool" { // orphan result: no call to attach it to
+				out = append(out, messages[i])
+			}
+			i++
+			continue
+		}
+
+		assistant := messages[i]
+		i++
+		for i < len(messages) && messages[i].Role == "assistant" && len(messages[i].ToolCalls) > 0 {
+			assistant.ToolCalls = append(assistant.ToolCalls, messages[i].ToolCalls...)
+			assistant.Content = joinAssistantContent(assistant.Content, messages[i].Content)
+			i++
+		}
+
+		results := make(map[string]OpenAIMessage, len(assistant.ToolCalls))
+		var deferred []OpenAIMessage
+		for i < len(messages) && messages[i].Role != "assistant" {
+			message := messages[i]
+			if message.Role == "tool" {
+				results[message.ToolCallID] = message
+			} else {
+				deferred = append(deferred, message)
+			}
+			i++
+		}
+
+		validCalls := assistant.ToolCalls[:0]
+		var orderedResults []OpenAIMessage
+		for _, call := range assistant.ToolCalls {
+			if result, ok := results[call.ID]; ok {
+				validCalls = append(validCalls, call)
+				orderedResults = append(orderedResults, result)
+			}
+		}
+		assistant.ToolCalls = validCalls
+		if len(validCalls) > 0 || hasMessageContent(assistant.Content) {
+			out = append(out, assistant)
+		}
+		out = append(out, orderedResults...)
+		out = append(out, deferred...)
+	}
+	return out
+}
+
+func joinAssistantContent(left, right interface{}) interface{} {
+	var parts []string
+	for _, content := range []interface{}{left, right} {
+		if text, ok := content.(string); ok && text != "" {
+			parts = append(parts, text)
+		}
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func hasMessageContent(content interface{}) bool {
+	switch value := content.(type) {
+	case string:
+		return value != ""
+	case []OpenAIContentPart:
+		return len(value) > 0
+	default:
+		return content != nil
+	}
+}
+
 func reasoningEffortFor(model string) string {
 	if strings.HasPrefix(model, "gemini") {
 		return "low"
@@ -68,7 +150,7 @@ func reasoningEffortFor(model string) string {
 // prefill/history tail. Add a neutral continuation turn for affected models;
 // tool-result and user-ended conversations remain byte-for-byte equivalent.
 func normalizeAssistantTail(model string, messages []OpenAIMessage) []OpenAIMessage {
-	rejectsAssistantTail := strings.HasPrefix(model, "gemini") || model == "claude-sonnet-5.5"
+	rejectsAssistantTail := strings.HasPrefix(model, "gemini") || model == "claude-sonnet-5.5" || model == "claude-opus-5.5"
 	if !rejectsAssistantTail || len(messages) == 0 {
 		return messages
 	}

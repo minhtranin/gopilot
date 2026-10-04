@@ -42,7 +42,7 @@ func TestHandleUserMessage_PreservesEmptyBlockArray(t *testing.T) {
 
 func TestNormalizeAssistantTail_AppendsContinuationForAffectedModels(t *testing.T) {
 	messages := []OpenAIMessage{{Role: "user", Content: "first"}, {Role: "assistant", Content: "prefill"}}
-	for _, model := range []string{"gemini-3.8-flash", "claude-sonnet-5.5"} {
+	for _, model := range []string{"gemini-3.8-flash", "claude-sonnet-5.5", "claude-opus-5.5"} {
 		got := normalizeAssistantTail(model, messages)
 		if len(got) != 3 || got[2].Role != "user" || got[2].Content != "Continue." {
 			t.Fatalf("unexpected normalized messages for %s: %#v", model, got)
@@ -60,5 +60,50 @@ func TestNormalizeAssistantTail_LeavesValidAndSupportedConversations(t *testing.
 	}
 	if got := normalizeAssistantTail("claude-sonnet-4", assistantTail); len(got) != 1 {
 		t.Fatalf("supported assistant prefill changed: %#v", got)
+	}
+}
+
+func TestNormalizeToolTurns_GroupsParallelCallsAndDefersImages(t *testing.T) {
+	callA := OpenAIToolCall{ID: "read-a", Type: "function", Function: OpenAIToolCallFunc{Name: "Read"}}
+	callB := OpenAIToolCall{ID: "read-b", Type: "function", Function: OpenAIToolCallFunc{Name: "Read"}}
+	image := OpenAIMessage{Role: "user", Content: []OpenAIContentPart{{Type: "image_url"}}}
+	messages := []OpenAIMessage{
+		{Role: "assistant", ToolCalls: []OpenAIToolCall{callA}},
+		{Role: "assistant", ToolCalls: []OpenAIToolCall{callB}},
+		{Role: "tool", ToolCallID: "read-b", Content: "result b"},
+		image,
+		{Role: "tool", ToolCallID: "read-a", Content: "result a"},
+	}
+
+	got := normalizeToolTurns(messages)
+	if len(got) != 4 {
+		t.Fatalf("expected assistant, two results, then image; got %#v", got)
+	}
+	if got[0].Role != "assistant" || len(got[0].ToolCalls) != 2 {
+		t.Fatalf("parallel calls were not grouped: %#v", got[0])
+	}
+	if got[1].Role != "tool" || got[1].ToolCallID != "read-a" || got[2].Role != "tool" || got[2].ToolCallID != "read-b" {
+		t.Fatalf("results were not placed immediately after calls in call order: %#v", got)
+	}
+	if got[3].Role != "user" {
+		t.Fatalf("image was not deferred until after all results: %#v", got)
+	}
+}
+
+func TestNormalizeToolTurns_DropsOnlyCallsMissingResults(t *testing.T) {
+	messages := []OpenAIMessage{
+		{Role: "assistant", Content: "checking", ToolCalls: []OpenAIToolCall{
+			{ID: "present", Type: "function", Function: OpenAIToolCallFunc{Name: "Read"}},
+			{ID: "missing", Type: "function", Function: OpenAIToolCallFunc{Name: "Read"}},
+		}},
+		{Role: "tool", ToolCallID: "present", Content: "ok"},
+	}
+
+	got := normalizeToolTurns(messages)
+	if len(got) != 2 || len(got[0].ToolCalls) != 1 || got[0].ToolCalls[0].ID != "present" {
+		t.Fatalf("missing-result call was not removed cleanly: %#v", got)
+	}
+	if got[0].Content != "checking" || got[1].ToolCallID != "present" {
+		t.Fatalf("valid assistant content or result changed: %#v", got)
 	}
 }
