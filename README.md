@@ -1,126 +1,56 @@
 # gopilot
 
-Tiny Go proxy. Claude Code talk Anthropic. GitHub Copilot talk OpenAI. gopilot sit in middle, translate both ways. Use your Copilot sub as Claude Code backend.
+Go proxy. Copilot sub → Claude Code backend.
 
 ```
-Claude Code / ocr  ──Anthropic──►  gopilot :4142  ──OpenAI──►  api.githubcopilot.com
+Claude Code ──Anthropic──► gopilot :4142 ──OpenAI──► api.githubcopilot.com
 ```
-
-Go rewrite of the JS [`copilot-api`](https://github.com/ericc-ch/copilot-api). Same login token file, so already logged in there = no re-login here.
-
-## Why not just use copilot-api
-
-Four bugs. gopilot fix all:
-
-| Problem | What happen | gopilot fix |
-|---|---|---|
-| Claude Code inject `x-anthropic-billing-header:` line into system prompt | Copilot-hosted models think it injection, **ignore whole system prompt** (your CLAUDE.md, `--system-prompt-file`) | strip line before Copilot see it |
-| Gemini on Copilot = reasoning model | no `reasoning_effort` → burn all `max_tokens` thinking, answer cut at ~14 tokens | force `reasoning_effort: "low"` for `gemini*` |
-| Burst of parallel calls (e.g. `ocr` review = 1 call per file, 51 in 10s) | most get HTTP 429 | max 4 in flight + retry with `Retry-After` backoff |
-| `claude-sonnet-4-20250514` style ids | Copilot 404 | map to bare `claude-sonnet-4` / `claude-opus-4` |
-
-Also: `gpt-5.6-*` models go through Copilot `/responses` API automatically.
 
 ## Need
 
-- Go 1.26+
-- GitHub account with **active Copilot subscription**
+Go 1.26+. GitHub account with Copilot.
 
 ## Run
 
 ```bash
 git clone https://github.com/minhtranin/gopilot && cd gopilot
 go build -o gopilot .
-./gopilot -port 4142
+./gopilot -port 4142      # first run: open printed link, enter code. Token saved.
 ```
 
-First run: no token → prints device code:
-```
-Open https://github.com/login/device and enter code: ABCD-1234
-```
-Open link, enter code, approve. Token saved to `~/.local/share/copilot-api/github_token`. Next runs skip login.
+## Commands
 
-Check alive:
-```bash
-curl localhost:4142/            # gopilot running
-curl localhost:4142/v1/models   # models your Copilot sub has
-```
+| | |
+|---|---|
+| `./gopilot -port 4142` | run proxy |
+| `./gopilot -models` | list models your sub has |
+| `./gopilot -usage` | plan + quota left |
+| `./gopilot -login` | re-login / switch account |
 
-## Login / usage (no copilot-api needed)
+Watch `premium_interactions` in `-usage`. That one run out.
 
-```bash
-./gopilot -login    # force new device login → switch account. Save token, exit.
-./gopilot -usage    # show plan + quota, exit
-```
-
-`-usage` output:
-```
-account : your-github-name
-plan    : business
-resets  : 2026-11-01
-
-premium_interactions    42.8% used  (2136 / 5000, 2864 left)
-chat                   unlimited
-completions            unlimited
-```
-`premium_interactions` = the one that run out. Watch that.
-
-## Use with Claude Code
+## Claude Code
 
 ```bash
 export ANTHROPIC_BASE_URL=http://localhost:4142
-export ANTHROPIC_AUTH_TOKEN=dummy           # gopilot ignore it, Claude Code just want something
-export ANTHROPIC_MODEL=gemini-3.8-flash     # any id from /v1/models
+export ANTHROPIC_AUTH_TOKEN=dummy               # any value
+export ANTHROPIC_MODEL=gemini-3.8-flash         # pick from -models
 export ANTHROPIC_SMALL_FAST_MODEL=gemini-3.8-flash
-export DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
-export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 claude
 ```
 
-fish wrapper, so normal `claude` stay untouched:
-```fish
-function ccc
-    set -lx ANTHROPIC_BASE_URL http://localhost:4142
-    set -lx ANTHROPIC_AUTH_TOKEN dummy
-    set -lx ANTHROPIC_MODEL gemini-3.8-flash
-    set -lx ANTHROPIC_SMALL_FAST_MODEL gemini-3.8-flash
-    set -lx API_TIMEOUT_MS 3000000
-    claude $argv
-end
-```
+## Fix vs copilot-api
 
-## Use with anything Anthropic-shaped
+- Strip `x-anthropic-billing-header` line. Else Copilot ignore whole system prompt.
+- Gemini: force `reasoning_effort: low`. Else answer cut after ~14 tokens.
+- Max 4 req in flight + retry on 429. Parallel burst no die.
+- `claude-sonnet-4-2025…` → `claude-sonnet-4`. No 404.
+- `gpt-5.6-*` → `/responses` auto.
 
-Endpoint `POST /v1/messages`. Stream + non-stream. Tools + vision work:
+Tools, vision, streaming: work.
 
-```bash
-curl localhost:4142/v1/messages -H 'content-type: application/json' -d '{
-  "model": "gemini-3.8-flash", "max_tokens": 256,
-  "messages": [{"role": "user", "content": "say ok"}]
-}'
-```
+## ⚠
 
-## What translate
-
-| Anthropic in | OpenAI out |
-|---|---|
-| `system` | `role: system` message |
-| `tools[].input_schema` | `tools[].function.parameters` |
-| `tool_choice: any` | `"required"` |
-| `tool_use` / `tool_result` | `tool_calls` / `role: tool` message |
-| `image` base64 block | `image_url` data URI + `copilot-vision-request: true` header |
-
-Back: `tool_calls` → `tool_use`, `finish_reason` → `stop_reason`.
-
-## Tests
-
-```bash
-go test ./...
-```
-
-## ⚠ Read before use
-
-- **No auth on the proxy.** Listens on **all interfaces** (`:4142`). Anyone who reach that port use **your** Copilot. Run on your own machine only, behind firewall. Don't expose to internet.
-- **Unofficial.** Pretends to be the VS Code Copilot Chat extension (same headers) because Copilot reject anything else. Not affiliated with GitHub. Using Copilot this way may break GitHub's Terms of Service. Own risk. Use your own subscription, not someone else's.
-- Copilot rate limits still apply. Heavy use → 429s → slower, not broken.
-- Logs print request bodies (truncated). Don't share your logs.
+- **No auth.** Listen all interfaces. Anyone reach port = use your Copilot. Local only. Firewall.
+- **Unofficial.** Fake VS Code Copilot headers. May break GitHub ToS. Own risk, own sub.
+- Logs show request bodies. No share logs.

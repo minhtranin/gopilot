@@ -27,6 +27,7 @@ func main() {
 	port := flag.String("port", "4141", "port to listen on")
 	login := flag.Bool("login", false, "force a fresh GitHub device login (switch account), then exit")
 	usage := flag.Bool("usage", false, "print Copilot plan and quota usage, then exit")
+	models := flag.Bool("models", false, "list models your Copilot subscription offers, then exit")
 	flag.Parse()
 
 	if *login {
@@ -60,6 +61,25 @@ func main() {
 	}
 
 	st := newState(githubToken)
+
+	if *models {
+		tok, err := fetchCopilotToken(githubToken)
+		if err != nil {
+			log.Fatal("copilot token: ", err)
+		}
+		st.setCopilotToken(tok.Token)
+		raw, err := fetchModels(st)
+		if err != nil {
+			log.Fatal(err)
+		}
+		list, err := parseModels(raw)
+		if err != nil {
+			log.Fatal("models: ", err)
+		}
+		printModels(os.Stdout, list)
+		return
+	}
+
 	if err := refreshLoop(st); err != nil {
 		log.Fatal("copilot token: ", err)
 	}
