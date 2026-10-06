@@ -17,17 +17,46 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 )
 
 func main() {
 	port := flag.String("port", "4141", "port to listen on")
+	login := flag.Bool("login", false, "force a fresh GitHub device login (switch account), then exit")
+	usage := flag.Bool("usage", false, "print Copilot plan and quota usage, then exit")
 	flag.Parse()
+
+	if *login {
+		tok, err := deviceLogin()
+		if err != nil {
+			log.Fatal("github auth: ", err)
+		}
+		if err := saveGitHubToken(tok); err != nil {
+			log.Fatal("save token: ", err)
+		}
+		if u, err := fetchCopilotUser(tok); err == nil {
+			fmt.Printf("logged in as %s (plan: %s)\n", u.Login, u.Plan)
+		} else {
+			fmt.Println("logged in; could not read Copilot plan:", err)
+		}
+		return
+	}
 
 	githubToken, err := ensureGitHubToken()
 	if err != nil {
 		log.Fatal("github auth: ", err)
+	}
+
+	if *usage {
+		u, err := fetchCopilotUser(githubToken)
+		if err != nil {
+			log.Fatal(err)
+		}
+		printUsage(os.Stdout, u)
+		return
 	}
 
 	st := newState(githubToken)

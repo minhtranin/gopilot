@@ -46,6 +46,25 @@ curl localhost:4142/            # gopilot running
 curl localhost:4142/v1/models   # models your Copilot sub has
 ```
 
+## Login / usage (no copilot-api needed)
+
+```bash
+./gopilot -login    # force new device login → switch account. Save token, exit.
+./gopilot -usage    # show plan + quota, exit
+```
+
+`-usage` output:
+```
+account : your-github-name
+plan    : business
+resets  : 2026-11-01
+
+premium_interactions    42.8% used  (2136 / 5000, 2864 left)
+chat                   unlimited
+completions            unlimited
+```
+`premium_interactions` = the one that run out. Watch that.
+
 ## Use with Claude Code
 
 ```bash
